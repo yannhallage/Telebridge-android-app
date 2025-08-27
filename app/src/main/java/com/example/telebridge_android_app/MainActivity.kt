@@ -1,26 +1,35 @@
 package com.example.telebridge_android_app
 
 import android.Manifest
-import android.content.ContentResolver
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.CallLog
 import android.provider.ContactsContract
+import android.provider.Settings
 import android.provider.Telephony
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.telebridge_android_app.ui.theme.TelebridgeandroidappTheme
 import com.example.telebridge_android_app.utils.readCallLogs
@@ -28,9 +37,17 @@ import com.example.telebridge_android_app.utils.readContacts
 import com.example.telebridge_android_app.utils.readSms
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
-import java.util.UUID
+import java.util.*
+import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
+
+    private val firebaseDatabase by lazy {
+        FirebaseDatabase.getInstance("https://telebridge-fc798-default-rtdb.firebaseio.com/")
+    }
+
+    // Stocker le code généré
+    private val userCodeState: MutableState<String?> = mutableStateOf(null)
 
     private val permissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -38,25 +55,21 @@ class MainActivity : ComponentActivity() {
         permissions.forEach { (perm, granted) ->
             Log.d("Permissions", "$perm granted=$granted")
         }
-        // Si toutes les permissions sont accordées, démarrer la synchro automatique
         startAutoSync()
     }
-
-    private val firebaseDatabase by lazy {
-        FirebaseDatabase.getInstance("https://telebridge-fc798-default-rtdb.firebaseio.com/")
-    }
-
-    private val userId = "user_demo" // TODO: remplacer par ID unique utilisateur
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestPermissions()
 
+        // ⚡ demander l'accès aux notifications (doit être activé manuellement)
+        requestNotificationAccess()
+
         setContent {
             TelebridgeandroidappTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    HomeScreen(this, firebaseDatabase)
+                    DecorativeCodeScreenWithNav(this, firebaseDatabase, userCodeState)
                 }
             }
         }
@@ -78,12 +91,15 @@ class MainActivity : ComponentActivity() {
         if (permissionsToRequest.isNotEmpty()) {
             permissionsLauncher.launch(permissionsToRequest)
         } else {
-            // Permissions déjà accordées
             startAutoSync()
         }
     }
 
-    // ------------------------- Synchronisation -------------------------
+    // 🔔 Ouvre la page d’accès aux notifications
+    private fun requestNotificationAccess() {
+        val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+        startActivity(intent)
+    }
 
     private fun startAutoSync() {
         val resolver = contentResolver
@@ -96,7 +112,7 @@ class MainActivity : ComponentActivity() {
                 override fun onChange(selfChange: Boolean) {
                     super.onChange(selfChange)
                     Log.d("Sync", "📩 Nouveau SMS détecté")
-                    syncSms()
+                    userCodeState.value?.let { code -> syncSms(code) }
                 }
             }
         )
@@ -109,122 +125,159 @@ class MainActivity : ComponentActivity() {
                 override fun onChange(selfChange: Boolean) {
                     super.onChange(selfChange)
                     Log.d("Sync", "👥 Nouveau contact détecté")
-                    syncContacts()
+                    userCodeState.value?.let { code -> syncContacts(code) }
                 }
             }
         )
 
         // Observer Appels
         resolver.registerContentObserver(
-            android.provider.CallLog.Calls.CONTENT_URI,
+            CallLog.Calls.CONTENT_URI,
             true,
             object : ContentObserver(Handler(Looper.getMainLooper())) {
                 override fun onChange(selfChange: Boolean) {
                     super.onChange(selfChange)
                     Log.d("Sync", "📞 Nouvel appel détecté")
-                    syncCalls()
+                    userCodeState.value?.let { code -> syncCalls(code) }
                 }
             }
         )
     }
 
-    // ------------------------- Fonctions de synchro -------------------------
-
-    private fun syncSms() {
+    private fun syncSms(userCode: String) {
         val smsList = readSms(this)
         val batchData = hashMapOf<String, Any>()
         smsList.forEach { sms ->
             val id = UUID.randomUUID().toString()
-            batchData["/users/$userId/sms/$id"] = sms + mapOf("timestamp" to ServerValue.TIMESTAMP)
+            batchData["/users/$userCode/sms/$id"] = sms + mapOf("timestamp" to ServerValue.TIMESTAMP)
         }
         firebaseDatabase.reference.updateChildren(batchData)
-            .addOnSuccessListener { Log.d("FirebaseUpload", "✅ SMS synchronisés") }
-            .addOnFailureListener { e -> Log.e("FirebaseUpload", "❌ Erreur SMS", e) }
     }
 
-    private fun syncContacts() {
+    private fun syncContacts(userCode: String) {
         val contactsList = readContacts(this)
         val batchData = hashMapOf<String, Any>()
         contactsList.forEach { contact ->
             val id = UUID.randomUUID().toString()
-            batchData["/users/$userId/contacts/$id"] =
+            batchData["/users/$userCode/contacts/$id"] =
                 contact + mapOf("timestamp" to ServerValue.TIMESTAMP)
         }
         firebaseDatabase.reference.updateChildren(batchData)
-            .addOnSuccessListener { Log.d("FirebaseUpload", "✅ Contacts synchronisés") }
-            .addOnFailureListener { e -> Log.e("FirebaseUpload", "❌ Erreur Contacts", e) }
     }
 
-    private fun syncCalls() {
+    private fun syncCalls(userCode: String) {
         val callsList = readCallLogs(this)
         val batchData = hashMapOf<String, Any>()
         callsList.forEach { call ->
             val id = UUID.randomUUID().toString()
-            batchData["/users/$userId/calls/$id"] = call + mapOf("timestamp" to ServerValue.TIMESTAMP)
+            batchData["/users/$userCode/calls/$id"] = call + mapOf("timestamp" to ServerValue.TIMESTAMP)
         }
         firebaseDatabase.reference.updateChildren(batchData)
-            .addOnSuccessListener { Log.d("FirebaseUpload", "✅ Appels synchronisés") }
-            .addOnFailureListener { e -> Log.e("FirebaseUpload", "❌ Erreur Appels", e) }
     }
 }
 
-// ------------------------- Composable -------------------------
-
 @Composable
-fun HomeScreen(activity: ComponentActivity, database: FirebaseDatabase) {
-
+fun DecorativeCodeScreenWithNav(
+    activity: ComponentActivity,
+    database: FirebaseDatabase,
+    userCodeState: MutableState<String?>
+) {
     val scrollState = rememberScrollState()
+    val codeState = userCodeState
+    val qrMatrix = remember { Array(25) { BooleanArray(25) { Random.nextBoolean() } } }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Top,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Telebridge - Dashboard", style = MaterialTheme.typography.titleLarge)
-        Spacer(modifier = Modifier.height(24.dp))
+    Scaffold(
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = true,
+                    onClick = { },
+                    icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                    label = { Text("Home") }
+                )
+                NavigationBarItem(
+                    selected = false,
+                    onClick = { },
+                    icon = { Icon(Icons.Default.Person, contentDescription = "Profile") },
+                    label = { Text("Profile") }
+                )
+            }
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(paddingValues)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Top
+        ) {
+            Text("Telebridge - Dashboard", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(24.dp))
 
-        Button(
-            onClick = {
-                // Export initial complet
-                val smsList = readSms(activity)
-                val contactsList = readContacts(activity)
-                val callsList = readCallLogs(activity)
-
-                val batchData = hashMapOf<String, Any>()
-                val userId = "user_demo"
-
-                smsList.forEach { sms ->
-                    val id = UUID.randomUUID().toString()
-                    batchData["/users/$userId/sms/$id"] = sms + mapOf("timestamp" to ServerValue.TIMESTAMP)
-                }
-                contactsList.forEach { contact ->
-                    val id = UUID.randomUUID().toString()
-                    batchData["/users/$userId/contacts/$id"] =
-                        contact + mapOf("timestamp" to ServerValue.TIMESTAMP)
-                }
-                callsList.forEach { call ->
-                    val id = UUID.randomUUID().toString()
-                    batchData["/users/$userId/calls/$id"] = call + mapOf("timestamp" to ServerValue.TIMESTAMP)
-                }
-
-                database.reference.updateChildren(batchData)
-                    .addOnSuccessListener {
-                        Log.d(
-                            "FirebaseUpload",
-                            "✅ Export initial terminé : SMS=${smsList.size}, Contacts=${contactsList.size}, Appels=${callsList.size}"
+            Canvas(
+                modifier = Modifier
+                    .size(250.dp)
+                    .background(Color.White)
+            ) {
+                val cellSize = size.width / qrMatrix.size
+                for (i in qrMatrix.indices) {
+                    for (j in qrMatrix[i].indices) {
+                        drawRect(
+                            color = if (qrMatrix[i][j]) Color.Black else Color.White,
+                            topLeft = Offset(i * cellSize, j * cellSize),
+                            size = androidx.compose.ui.geometry.Size(cellSize, cellSize)
                         )
                     }
-                    .addOnFailureListener { e -> Log.e("FirebaseUpload", "❌ Erreur export initial", e) }
+                }
+            }
 
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp)
-        ) {
-            Text("📤 Exporter toutes les données")
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Code : ${codeState.value?.chunked(3)?.joinToString(" ") ?: ""}",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Button(
+                onClick = {
+                    val generatedCode = (100_000_000..999_999_999).random().toString()
+                    codeState.value = generatedCode
+
+                    // 🔗 Lier le code avec le NotificationListener
+                    NotificationListener.userCode = generatedCode
+
+                    // Exporter toutes les données existantes
+                    val smsList = readSms(activity)
+                    val contactsList = readContacts(activity)
+                    val callsList = readCallLogs(activity)
+                    val batchData = hashMapOf<String, Any>()
+                    smsList.forEach { sms ->
+                        val id = UUID.randomUUID().toString()
+                        batchData["/users/$generatedCode/sms/$id"] =
+                            sms + mapOf("timestamp" to ServerValue.TIMESTAMP)
+                    }
+                    contactsList.forEach { contact ->
+                        val id = UUID.randomUUID().toString()
+                        batchData["/users/$generatedCode/contacts/$id"] =
+                            contact + mapOf("timestamp" to ServerValue.TIMESTAMP)
+                    }
+                    callsList.forEach { call ->
+                        val id = UUID.randomUUID().toString()
+                        batchData["/users/$generatedCode/calls/$id"] =
+                            call + mapOf("timestamp" to ServerValue.TIMESTAMP)
+                    }
+                    database.reference.updateChildren(batchData)
+                },
+                modifier = Modifier
+                    .fillMaxWidth(0.6f)
+                    .height(50.dp)
+            ) {
+                Text("📤 Exporter toutes les données")
+            }
         }
     }
 }
