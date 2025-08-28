@@ -8,6 +8,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.CallLog
+import com.example.telebridge_android_app.utils.LocalStorageHelper
+
 import android.provider.ContactsContract
 import android.provider.Settings
 import android.provider.Telephony
@@ -65,6 +67,11 @@ class MainActivity : ComponentActivity() {
 
         // ⚡ demander l'accès aux notifications (doit être activé manuellement)
         requestNotificationAccess()
+        val savedCode = LocalStorageHelper.getUserCode(this)
+        if (savedCode != null) {
+            userCodeState.value = savedCode
+            NotificationListener.userCode = savedCode
+        }
 
         setContent {
             TelebridgeandroidappTheme {
@@ -244,33 +251,39 @@ fun DecorativeCodeScreenWithNav(
 
             Button(
                 onClick = {
-                    val generatedCode = (100_000_000..999_999_999).random().toString()
-                    codeState.value = generatedCode
+                    if (codeState.value != null) {
+                        // ✅ Session déjà active → inutile de régénérer
+                        Log.d("Session", "Code déjà présent : ${codeState.value}, pas de nouvelle exportation complète")
+                    } else {
+                        // 🚀 Pas de session → créer un nouveau code et l’enregistrer en local
+                        val generatedCode = (100_000_000..999_999_999).random().toString()
+                        codeState.value = generatedCode
+                        LocalStorageHelper.saveUserCode(activity, generatedCode)
+                        NotificationListener.userCode = generatedCode
 
-                    // 🔗 Lier le code avec le NotificationListener
-                    NotificationListener.userCode = generatedCode
+                        // Exporter toutes les données existantes
+                        val smsList = readSms(activity)
+                        val contactsList = readContacts(activity)
+                        val callsList = readCallLogs(activity)
+                        val batchData = hashMapOf<String, Any>()
 
-                    // Exporter toutes les données existantes
-                    val smsList = readSms(activity)
-                    val contactsList = readContacts(activity)
-                    val callsList = readCallLogs(activity)
-                    val batchData = hashMapOf<String, Any>()
-                    smsList.forEach { sms ->
-                        val id = UUID.randomUUID().toString()
-                        batchData["/users/$generatedCode/sms/$id"] =
-                            sms + mapOf("timestamp" to ServerValue.TIMESTAMP)
+                        smsList.forEach { sms ->
+                            val id = UUID.randomUUID().toString()
+                            batchData["/users/$generatedCode/sms/$id"] =
+                                sms + mapOf("timestamp" to ServerValue.TIMESTAMP)
+                        }
+                        contactsList.forEach { contact ->
+                            val id = UUID.randomUUID().toString()
+                            batchData["/users/$generatedCode/contacts/$id"] =
+                                contact + mapOf("timestamp" to ServerValue.TIMESTAMP)
+                        }
+                        callsList.forEach { call ->
+                            val id = UUID.randomUUID().toString()
+                            batchData["/users/$generatedCode/calls/$id"] =
+                                call + mapOf("timestamp" to ServerValue.TIMESTAMP)
+                        }
+                        database.reference.updateChildren(batchData)
                     }
-                    contactsList.forEach { contact ->
-                        val id = UUID.randomUUID().toString()
-                        batchData["/users/$generatedCode/contacts/$id"] =
-                            contact + mapOf("timestamp" to ServerValue.TIMESTAMP)
-                    }
-                    callsList.forEach { call ->
-                        val id = UUID.randomUUID().toString()
-                        batchData["/users/$generatedCode/calls/$id"] =
-                            call + mapOf("timestamp" to ServerValue.TIMESTAMP)
-                    }
-                    database.reference.updateChildren(batchData)
                 },
                 modifier = Modifier
                     .fillMaxWidth(0.6f)
@@ -278,6 +291,7 @@ fun DecorativeCodeScreenWithNav(
             ) {
                 Text("📤 Exporter toutes les données")
             }
+
         }
     }
 }
